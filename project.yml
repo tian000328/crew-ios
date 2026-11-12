@@ -13,6 +13,7 @@ targets:
       - path: Crew
         excludes:
           - "www"
+          - "Info.plist"
       - path: Crew/www
         type: folder
         buildPhase: resources
