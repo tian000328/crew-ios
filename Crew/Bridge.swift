@@ -74,6 +74,7 @@ enum FSOps {
         let agent = segs.isEmpty ? "" : segs.removeFirst()
         let sub = segs.joined(separator: "/")
 
+        do {
         switch cmd {
 
         case "root":
@@ -114,7 +115,7 @@ enum FSOps {
                                                          options: [.skipsHiddenFiles])) ?? []
                 var roots: [[String: Any]] = []
                 for it in items {
-                    let isDir = (try? it.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                    let isDir = (try? it.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
                     if isDir {
                         roots.append(["name": it.lastPathComponent, "dir": true, "size": 0,
                                       "path": it.lastPathComponent])
@@ -136,11 +137,11 @@ enum FSOps {
             var out: [[String: Any]] = []
             for it in items {
                 let vals = try? it.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
-                let isDir = vals?.isDirectory ?? false
+                let isDir = (vals?.isDirectory ?? nil) == true
                 out.append([
                     "name": it.lastPathComponent,
                     "dir": isDir,
-                    "size": isDir ? 0 : (vals?.fileSize ?? 0),
+                    "size": isDir ? 0 : ((vals?.fileSize ?? nil) ?? 0),
                     "path": rel.isEmpty ? it.lastPathComponent : rel + "/" + it.lastPathComponent
                 ])
             }
@@ -171,7 +172,7 @@ enum FSOps {
             try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             let text = (args["content"] as? String) ?? ""
             try text.write(to: url, atomically: true, encoding: .utf8)
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let size = ((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? nil) ?? 0
             return ["ok": true, "path": rel, "size": size]
 
         case "rm":
@@ -184,6 +185,9 @@ enum FSOps {
 
         default:
             return ["ok": false, "err": "未知命令：\(cmd)"]
+        }
+        } catch {
+            return ["ok": false, "err": "文件操作失败：\(error.localizedDescription)"]
         }
     }
 }

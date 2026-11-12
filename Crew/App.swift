@@ -37,6 +37,8 @@ struct RootView: UIViewControllerRepresentable {
         let cfg = WKWebViewConfiguration()
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
+        // file:// 页面默认不能发跨域请求，模型 API 会全部失败
+        cfg.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
         cfg.userContentController.add(bridge, name: "crew")
 
         let wv = WKWebView(frame: .zero, configuration: cfg)
