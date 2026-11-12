@@ -363,7 +363,7 @@
     const allMcp = (st().mcp || []).filter(m => m.enabled !== false);
     const mine = allMcp.filter(m => (ag.mcpIds || []).indexOf(m.id) >= 0);
     const mcpTools = MCP.schemas(mine);
-    const allTools = [...plugs.map(T.schema), ...fsTools, ...mcpTools];
+    const allTools = [...plugs.map(T.schema), ...fsTools, ...mcpTools, ...biSchemas(st())];
     const tools = allTools.length ? allTools : undefined;
 
     for (let round = 0; round < 4; round++) {
@@ -381,14 +381,17 @@
           let res = '';
           try {
             const args = JSON.parse(tc.function.arguments || '{}');
-            if (fname.indexOf('fs_') === 0) res = await F.run(ag.code, fname, args);
+            if (fname.indexOf('bi__') === 0) res = await biRun(fname.slice(4), args);
+            else if (fname.indexOf('fs_') === 0) res = await F.run(ag.code, fname, args);
             else if (fname.indexOf('mcp__') === 0) res = await MCP.callByName(st(), fname, args);
             else {
               const out = plug ? await T.run(plug, args) : '没这个工具';
               res = typeof out === 'string' ? out : JSON.stringify(out);
             }
           } catch (e) { res = '参数解析失败：' + e.message; }
-          const tname = fname.indexOf('fs_') === 0
+          const tname = fname.indexOf('bi__') === 0
+            ? ((BI.list || []).find(t => t.id === fname.slice(4)) || {}).name || fname
+            : fname.indexOf('fs_') === 0
             ? ({ fs_list: '看文件', fs_read: '读文件', fs_write: '写文件' }[fname] || fname)
             : fname.indexOf('mcp__') === 0
               ? 'MCP · ' + fname.split('__').slice(2).join('__')
@@ -797,6 +800,50 @@
   }
 
   // ---- 工具 ----
+  /* ---- 服务端内置工具（真干活那三个） ---- */
+  const BI = { list: null, err: '' };
+  async function biLoad(force) {
+    if (BI.list && !force) return BI.list;
+    if (window.__crewBridge) { BI.err = '这个版本没有服务端，内置工具只在网页版可用'; return []; }
+    try {
+      const r = await fetch('/api/tool/list');
+      const j = await r.json();
+      BI.list = (j && j.tools) || [];
+      BI.err = '';
+    } catch (e) { BI.list = []; BI.err = '连不上本机服务：' + e.message; }
+    return BI.list;
+  }
+  function biOn(s, id) {
+    const m = (s && s.builtins) || {};
+    return m[id] !== false;
+  }
+  function biSchemas(s) {
+    return (BI.list || []).filter(t => biOn(s, t.id)).map(t => ({
+      type: 'function',
+      function: {
+        name: 'bi__' + t.id,
+        description: t.desc,
+        parameters: {
+          type: 'object',
+          properties: Object.fromEntries(Object.entries(t.params || {}).map(([k, v]) => [k, {
+            type: v.type || 'string', description: v.desc || k
+          }])),
+          required: Object.entries(t.params || {}).filter(([, v]) => v.required !== false).map(([k]) => k)
+        }
+      }
+    }));
+  }
+  async function biRun(tool, args) {
+    try {
+      const r = await fetch('/api/tool/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool, args: args || {} })
+      });
+      const j = await r.json();
+      return j.ok ? String(j.out).slice(0, 6000) : ('失败：' + (j.err || '未知错误'));
+    } catch (e) { return '调用失败：' + e.message; }
+  }
+
   function pageTools() {
     const s = st();
     const plugs = s.plugins || [];
@@ -814,7 +861,7 @@
       <div class="scroll">
         <div class="sec">
           <div class="card">
-            ${row({ icon: ICON.tool, tint: 'green', title: '内置工具', sub: '文件空间 · ' + builtin.length + ' 个 · 装了文件空间才生效', act: 'toolsbuiltin', chev: true })}
+            ${row({ icon: ICON.tool, tint: 'green', title: '内置工具', sub: '读网页 / 跑 Python / 搜文件' + ((BI.list || []).length ? ' + 文件空间 ' + builtin.length + ' 个' : ''), act: 'toolsbuiltin', chev: true })}
             ${row({ icon: ICON.tool, tint: 'orange', title: '插件', sub: plugs.length ? plugs.length + ' 个 · 自己填地址和参数' : '还没加，点进去加', act: 'toolsplugins', chev: true })}
             ${row({ icon: ICON.tool, tint: 'blue', title: 'MCP 服务器', sub: mcps.length ? mcps.length + ' 个服务器 · ' + mcpTools + ' 个工具' : '还没加，点进去加', act: 'tools-mcp', chev: true })}
           </div>
@@ -853,24 +900,37 @@
 
   function pageBuiltin() {
     const s = st();
-    const items = [
-      { id: 'fs_list', name: '看目录', desc: '列公共区 + 自己私有目录的文件' },
-      { id: 'fs_read', name: '读文件', desc: '读一个文件的全文' },
-      { id: 'fs_write', name: '写文件', desc: '新建或覆盖一个文件' }
-    ];
+    const list = BI.list || [];
     return `${head('内置工具')}
       <div class="scroll">
         <div class="sec">
+          <div class="sec-f" style="padding-left:0">装好就能用 · 不用填 key</div>
           <div class="card">
-            ${items.map(t => row({ title: t.name, sub: t.desc + '  ·  ' + t.id })).join('')}
+            ${list.map(t => `<div class="row">
+              <div class="ri" style="background:#eef4ff">${esc(t.icon || '🔧')}</div>
+              <div class="rtxt">
+                <div class="rt">${esc(t.name)}</div>
+                <div class="rs">${esc(t.desc)}</div>
+              </div>
+              <button class="swi ${biOn(s, t.id) ? 'on' : ''}" data-act="bitoggle" data-bi="${t.id}"><i></i></button>
+            </div>`).join('') || `<div class="row"><div class="rtxt"><div class="rs">${esc(BI.err || '加载中…')}</div></div></div>`}
           </div>
-          <div class="sec-f">这三个不占插件名额，装了文件空间（设置 → 文件空间里点角色）就自动有。</div>
+          <div class="sec-f">关掉的不会出现在任何角色的工具列表里。这三个都在本机执行，不往外传数据。</div>
+        </div>
+        <div class="sec">
+          <div class="sec-f" style="padding-left:0">文件空间工具</div>
+          <div class="card">
+            ${row({ title: '看目录', sub: 'fs_list · 列公共区和自己的私有目录' })}
+            ${row({ title: '读文件', sub: 'fs_read · 读一个文件的全文' })}
+            ${row({ title: '写文件', sub: 'fs_write · 新建或覆盖文件' })}
+          </div>
+          <div class="sec-f">装了文件空间（设置 → 文件空间里点角色）就自动有，不占开关。</div>
         </div>
         <div class="sec">
           <div class="sec-f" style="padding-left:0">谁在用</div>
           <div class="card">
             ${s.agents.map(a => row({
-              title: a.name, sub: (a.dir || a.privateOn) ? '已启用文件空间' : '未启用',
+              title: a.code, sub: (a.dir || a.privateOn) ? '文件空间已开' : '只有上面三个',
               act: 'aedit', id: a.id, chev: true
             })).join('') || `<div class="row"><div class="rtxt"><div class="rs">还没有角色</div></div></div>`}
           </div>
@@ -878,7 +938,6 @@
       </div>`;
   }
 
-  /* 插件详情：改地址参数、真跑一次、删除 */
   function pluginSheet(id) {
     const s = st();
     const p = id ? (s.plugins || []).find(x => x.id === id) : null;
@@ -1583,7 +1642,16 @@
       case 'sdone': nav.settings = []; nav.view = 'list'; render(); break;
       case 'nav': nav.settings = [id]; render(); break;
       case 'toolsplugins': nav.settings = ['tools', 'plugins']; render(); break;
-      case 'toolsbuiltin': nav.settings = ['tools', 'builtin']; render(); break;
+      case 'toolsbuiltin':
+        nav.settings = ['tools', 'builtin']; render();
+        biLoad().then(() => { if (nav.settings[1] === 'builtin') render(); });
+        break;
+      case 'bitoggle': {
+        const k = el.dataset.bi;
+        S.set(x => { x.builtins = x.builtins || {}; x.builtins[k] = x.builtins[k] === false; });
+        render();
+        break;
+      }
       case 'tools-mcp': nav.settings = ['mcp']; render(); break;
       case 'pnew': pluginImportSheet(); break;
       case 'popen': pluginSheet(id); break;
@@ -1760,6 +1828,8 @@
 
   // 启动
   render();
+  // 内置工具清单：会话装配要用，先拉一次
+  biLoad().then(() => { if (['tools', 'builtin'].indexOf(nav.settings[1]) >= 0 || nav.settings[0] === 'tools') render(); });
 
   // 磁盘上已经存在的文件夹，回填到角色身上（换了浏览器/清了缓存也不丢）
   F.list('').then(r => {
