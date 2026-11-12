@@ -64,5 +64,41 @@ const T = (() => {
     headers: {}
   };
 
-  return { schema, run, check, validName, sample: () => JSON.parse(JSON.stringify(SAMPLE)) };
+
+  function autoId(name) {
+    const raw = String(name || '').trim();
+    let id = raw.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_{2,}/g, '_').replace(/^_+|_+$/g, '').slice(0, 48);
+    if (id.length < 2) {
+      let h = 0;
+      for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) % 100000;
+      id = 'tool_' + h;
+    }
+    return id;
+  }
+
+  function normalize(o) {
+    if (!o) return {};
+    if (o.type === 'function' && o.function) {
+      const f = o.function;
+      const c = Object.assign({}, f);
+      c.name = f.name;
+      c.desc = f.description || c.desc || '';
+      c.id = f.name || autoId(f.description || 'tool');
+      if (c.parameters) {
+        c.params = {};
+        const props = c.parameters.properties || {};
+        const req = c.parameters.required || [];
+        Object.keys(props).forEach(k => {
+          const v = props[k] || {};
+          c.params[k] = { type: v.type || 'string', desc: v.description || '', required: req.indexOf(k) >= 0, enum: v.enum };
+        });
+      }
+      return c;
+    }
+    const c = Object.assign({}, o);
+    if (!c.id) c.id = autoId(c.name || c.desc);
+    return c;
+  }
+
+  return { schema, run, check, validName, normalize, sample: () => JSON.parse(JSON.stringify(SAMPLE)) };
 })();

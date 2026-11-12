@@ -361,7 +361,7 @@
     const plugs = (ag.tools || []).map(id => (st().plugins || []).find(p => p.id === id)).filter(Boolean);
     const fsTools = F.tools(ag.code);
     const allMcp = (st().mcp || []).filter(m => m.enabled !== false);
-    const mine = (ag.mcpIds && ag.mcpIds.length) ? allMcp.filter(m => ag.mcpIds.indexOf(m.id) >= 0) : allMcp;
+    const mine = allMcp.filter(m => (ag.mcpIds || []).indexOf(m.id) >= 0);
     const mcpTools = MCP.schemas(mine);
     const allTools = [...plugs.map(T.schema), ...fsTools, ...mcpTools];
     const tools = allTools.length ? allTools : undefined;
@@ -579,7 +579,10 @@
       case 'usage': return pageUsage();
       case 'appearance': return pageAppearance();
       case 'files': return nav.settings.length > 1 ? pageBrowser() : pageFiles();
-      case 'tools': return pageTools();
+      case 'tools':
+        if (nav.settings[1] === 'plugins') return pagePlugins();
+        if (nav.settings[1] === 'builtin') return pageBuiltin();
+        return pageTools();
       case 'threads': return pageThreads();
       case 'skills': return pageSkills();
       case 'agents': return p[1] ? pageAgentEdit(p[1]) : pageAgents();
@@ -796,20 +799,252 @@
   // ---- 工具 ----
   function pageTools() {
     const s = st();
+    const plugs = s.plugins || [];
+    const mcps = s.mcp || [];
+    const mcpTools = mcps.reduce((n, m) => n + (m.tools || []).length, 0);
+    const using = c => s.agents.filter(a => (a.tools || []).indexOf(c) >= 0).length;
+
+    const builtin = [
+      { id: 'fs_list', n: '看目录' },
+      { id: 'fs_read', n: '读文件' },
+      { id: 'fs_write', n: '写文件' }
+    ];
+
     return `${head('可用工具')}
       <div class="scroll">
         <div class="sec">
           <div class="card">
-            ${(s.plugins || []).map(p => row({
-              icon: p.icon ? '' : ICON.tool, tint: 'orange',
-              title: (p.icon || '') + ' ' + p.name, sub: p.desc || p.method + ' ' + p.url,
-              act: 'tedit', id: p.id, chev: true
-            })).join('') || `<div class="row"><div class="rtxt"><div class="rs">还没有工具</div></div></div>`}
+            ${row({ icon: ICON.tool, tint: 'green', title: '内置工具', sub: '文件空间 · ' + builtin.length + ' 个 · 装了文件空间才生效', act: 'toolsbuiltin', chev: true })}
+            ${row({ icon: ICON.tool, tint: 'orange', title: '插件', sub: plugs.length ? plugs.length + ' 个 · 自己填地址和参数' : '还没加，点进去加', act: 'toolsplugins', chev: true })}
+            ${row({ icon: ICON.tool, tint: 'blue', title: 'MCP 服务器', sub: mcps.length ? mcps.length + ' 个服务器 · ' + mcpTools + ' 个工具' : '还没加，点进去加', act: 'tools-mcp', chev: true })}
           </div>
-          <div class="sec-f">工具就是一个 JSON：地址里用 {参数} 占位，模型自己填参数，你这个手机真去请求。</div>
+          <div class="sec-f">三条通道各管一批工具。角色在「灵魂」里勾了哪条，那条的工具才会出现在他的会话里。</div>
         </div>
-        <div class="card" style="margin-top:12px"><div class="row tap" data-act="tnew"><div class="rtxt"><div class="rt" style="color:#007aff">+ 添加工具</div></div></div></div>
+        <div class="sec">
+          <div class="sec-f" style="padding-left:0">各角色挂了什么</div>
+          <div class="card">
+            ${s.agents.map(a => row({
+              icon: '', title: a.name,
+              sub: (a.tools || []).length + ' 个插件 · ' + ((a.mcpIds || []).length) + ' 个 MCP · ' + (a.dir || a.privateOn ? '有文件空间' : '无文件空间'),
+              act: 'aedit', id: a.id, chev: true
+            })).join('') || `<div class="row"><div class="rtxt"><div class="rs">还没有角色</div></div></div>`}
+          </div>
+        </div>
       </div>`;
+  }
+
+  function pagePlugins() {
+    const s = st();
+    const plugs = s.plugins || [];
+    return `${head('插件', `<button class="pill" data-act="pnew">添加</button>`)}
+      <div class="scroll">
+        <div class="sec">
+          <div class="card">
+            ${plugs.map(p => row({
+              icon: p.icon || '', tint: 'orange',
+              title: p.name, sub: (p.desc || (p.method || 'GET') + ' ' + p.url),
+              act: 'popen', id: p.id, chev: true
+            })).join('') || `<div class="row"><div class="rtxt"><div class="rs">还没有插件</div></div></div>`}
+          </div>
+          <div class="sec-f">插件 = 一个 HTTP 地址 + 参数定义。模型自己决定调不调、填什么参数，这台设备真去请求，结果回给它。</div>
+        </div>
+      </div>`;
+  }
+
+  function pageBuiltin() {
+    const s = st();
+    const items = [
+      { id: 'fs_list', name: '看目录', desc: '列公共区 + 自己私有目录的文件' },
+      { id: 'fs_read', name: '读文件', desc: '读一个文件的全文' },
+      { id: 'fs_write', name: '写文件', desc: '新建或覆盖一个文件' }
+    ];
+    return `${head('内置工具')}
+      <div class="scroll">
+        <div class="sec">
+          <div class="card">
+            ${items.map(t => row({ title: t.name, sub: t.desc + '  ·  ' + t.id })).join('')}
+          </div>
+          <div class="sec-f">这三个不占插件名额，装了文件空间（设置 → 文件空间里点角色）就自动有。</div>
+        </div>
+        <div class="sec">
+          <div class="sec-f" style="padding-left:0">谁在用</div>
+          <div class="card">
+            ${s.agents.map(a => row({
+              title: a.name, sub: (a.dir || a.privateOn) ? '已启用文件空间' : '未启用',
+              act: 'aedit', id: a.id, chev: true
+            })).join('') || `<div class="row"><div class="rtxt"><div class="rs">还没有角色</div></div></div>`}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  /* 插件详情：改地址参数、真跑一次、删除 */
+  function pluginSheet(id) {
+    const s = st();
+    const p = id ? (s.plugins || []).find(x => x.id === id) : null;
+    if (!p) { toast('插件不存在'); return; }
+    const paramLines = Object.keys(p.params || {}).map(k => {
+      const v = p.params[k] || {};
+      return `${k}|${v.type || 'string'}|${v.desc || ''}`;
+    }).join('\n');
+
+    sheet(p.name || '插件', `
+      <div class="field-l">名字</div>
+      <input class="inp" id="q-name" value="${esc(p.name || '')}">
+      <div class="field-l">说明（模型靠它决定要不要调）</div>
+      <input class="inp" id="q-desc" value="${esc(p.desc || '')}">
+      <div class="row2">
+        <div><div class="field-l">方法</div>
+          <select class="inp" id="q-method">
+            ${['GET', 'POST', 'PUT', 'DELETE'].map(m => `<option ${((p.method || 'GET').toUpperCase() === m) ? 'selected' : ''}>${m}</option>`).join('')}
+          </select>
+        </div>
+        <div><div class="field-l">图标</div><input class="inp" id="q-icon" value="${esc(p.icon || '')}" placeholder="🔧"></div>
+      </div>
+      <div class="field-l">地址（参数用 {name} 占位，POST 会发 JSON body）</div>
+      <input class="inp" id="q-url" value="${esc(p.url || '')}" placeholder="https://...">
+      <div class="field-l">请求头（每行 Key: Value）</div>
+      <textarea class="inp" id="q-hdr" style="min-height:60px">${esc(Object.entries(p.headers || {}).map(([k, v]) => k + ': ' + v).join('\n'))}</textarea>
+      <div class="field-l">参数（每行 名字|类型|说明）</div>
+      <textarea class="inp" id="q-params" style="min-height:90px">${esc(paramLines)}</textarea>
+      <div class="field-l">试跑参数（JSON）</div>
+      <textarea class="inp" id="q-test" style="min-height:60px">{}</textarea>
+      <div class="note" id="q-out">点「试跑」会用上面的参数真发一次请求。</div>
+      <div class="sh-f">
+        <button class="btn ghost danger" id="q-del">删除</button>
+        <button class="btn ghost" id="q-run">试跑</button>
+        <button class="btn" id="q-save">保存</button>
+      </div>
+    `, box => {
+      const collect = () => {
+        const params = {};
+        box.querySelector('#q-params').value.split('\n').forEach(line => {
+          const [k, t, d] = line.split('|').map(x => (x || '').trim());
+          if (!k) return;
+          params[k] = { type: t || 'string', desc: d || '' };
+        });
+        const headers = {};
+        box.querySelector('#q-hdr').value.split('\n').forEach(line => {
+          const i = line.indexOf(':');
+          if (i < 0) return;
+          const k = line.slice(0, i).trim(), v = line.slice(i + 1).trim();
+          if (k) headers[k] = v;
+        });
+        return {
+          id: p.id,
+          name: box.querySelector('#q-name').value.trim(),
+          desc: box.querySelector('#q-desc').value.trim(),
+          method: box.querySelector('#q-method').value,
+          icon: box.querySelector('#q-icon').value.trim(),
+          url: box.querySelector('#q-url').value.trim(),
+          headers, params
+        };
+      };
+
+      box.querySelector('#q-run').onclick = async () => {
+        const c = collect();
+        const err = T.check(c);
+        if (err) { box.querySelector('#q-out').textContent = '还有问题：' + err; return; }
+        let args = {};
+        try { args = JSON.parse(box.querySelector('#q-test').value || '{}'); } catch (e) {
+          box.querySelector('#q-out').textContent = '试跑参数不是合法 JSON'; return;
+        }
+        box.querySelector('#q-out').textContent = '请求中…';
+        const out = await T.run(c, args);
+        box.querySelector('#q-out').textContent = String(out).slice(0, 600);
+      };
+
+      box.querySelector('#q-save').onclick = () => {
+        const c = collect();
+        const err = T.check(c);
+        if (err) { toast(err); return; }
+        S.set(st => {
+          const old = st.plugins.find(x => x.id === p.id);
+          if (old) Object.assign(old, c); else st.plugins.push(Object.assign({ id: p.id }, c));
+        });
+        closeSheet(); render(); toast('已保存');
+      };
+
+      box.querySelector('#q-del').onclick = () => {
+        S.set(st => {
+          st.plugins = st.plugins.filter(x => x.id !== p.id);
+          st.agents.forEach(a => { a.tools = (a.tools || []).filter(t => t !== p.id); });
+        });
+        closeSheet(); render(); toast('已删除');
+      };
+    });
+  }
+
+  /* 插件导入：三条通道 —— 粘贴 / 网址 / 文件 */
+  function pluginImportSheet() {
+    sheet('添加插件', `
+      <div class="tabs" id="ptab">
+        <button class="tab on" data-t="paste">粘贴 JSON</button>
+        <button class="tab" data-t="url">从网址</button>
+        <button class="tab" data-t="file">从文件</button>
+      </div>
+      <div id="ppane">
+        <div class="field-l">JSON</div>
+        <textarea class="inp" id="p-json" style="min-height:200px;font-family:ui-monospace,Menlo,monospace;font-size:13px">${esc(JSON.stringify(T.sample(), null, 2))}</textarea>
+      </div>
+      <div id="uhint" class="note">支持 OpenAI 风格的 function 定义，也支持简写：{"name","desc","url","method","params"}。</div>
+      <button class="btn" id="p-ok">添加</button>
+    `, box => {
+      const pane = box.querySelector('#ppane');
+      const heads = {
+        paste: `<div class="field-l">JSON</div>
+          <textarea class="inp" id="p-json" style="min-height:200px;font-family:ui-monospace,Menlo,monospace;font-size:13px">${esc(JSON.stringify(T.sample(), null, 2))}</textarea>`,
+        url: `<div class="field-l">地址</div>
+          <input class="inp" id="p-url" placeholder="https://example.com/plugins.json">
+          <div class="note">拉回来可以是一个插件，也可以是一个插件数组。</div>`,
+        file: `<div class="field-l">选择文件</div>
+          <input class="inp" type="file" id="p-file" accept=".json,application/json">
+          <div class="note">从「文件」App 里选一个 .json。</div>`
+      };
+      box.querySelectorAll('#ptab .tab').forEach(t => t.onclick = () => {
+        box.querySelectorAll('#ptab .tab').forEach(x => x.classList.remove('on'));
+        t.classList.add('on');
+        pane.innerHTML = heads[t.dataset.t];
+      });
+
+      box.querySelector('#p-ok').onclick = async () => {
+        const tab = box.querySelector('#ptab .tab.on').dataset.t;
+        let raw = '';
+        try {
+          if (tab === 'paste') raw = box.querySelector('#p-json').value;
+          else if (tab === 'url') {
+            const u = box.querySelector('#p-url').value.trim();
+            if (!u) { toast('地址没填'); return; }
+            const r = await fetch(u);
+            if (!r.ok) { toast('拉取失败 HTTP ' + r.status); return; }
+            raw = await r.text();
+          } else {
+            const f = box.querySelector('#p-file').files[0];
+            if (!f) { toast('没选文件'); return; }
+            raw = await f.text();
+          }
+          const got = JSON.parse(raw);
+          const list = Array.isArray(got) ? got : [got];
+          let n = 0, bad = '';
+          const skips = [];
+          S.set(s => {
+            list.forEach(o => {
+              const c = T.normalize(o);
+              const err = T.check(c);
+              if (err) { bad = err; skips.push((c.name || c.id || '未命名') + '：' + err); return; }
+              const id = c.id || S.uid('p_');
+              const old = s.plugins.find(x => x.id === id);
+              if (old) Object.assign(old, c, { id: old.id });
+              else s.plugins.push(Object.assign({}, c, { id }));
+              n++;
+            });
+          });
+          if (!n) { toast('没加进去：' + (bad || '格式不对')); return; }
+          closeSheet(); render();
+          toast(skips.length ? `加了 ${n} 个，跳过 ${skips.length} 个（${skips[0]}）` : `加了 ${n} 个插件`);
+        } catch (e) { toast('解析失败：' + e.message); }
+      };
+    });
   }
 
   function toolSheet(id) {
@@ -1347,6 +1582,11 @@
       }
       case 'sdone': nav.settings = []; nav.view = 'list'; render(); break;
       case 'nav': nav.settings = [id]; render(); break;
+      case 'toolsplugins': nav.settings = ['tools', 'plugins']; render(); break;
+      case 'toolsbuiltin': nav.settings = ['tools', 'builtin']; render(); break;
+      case 'tools-mcp': nav.settings = ['mcp']; render(); break;
+      case 'pnew': pluginImportSheet(); break;
+      case 'popen': pluginSheet(id); break;
       case 'mcpadd': mcpAddSheet(); break;
       case 'mcpopen': nav.settings = ['mcp', id]; render(); break;
       case 'mcptoggle': S.set(x => { const m = (x.mcp || []).find(v => v.id === id); if (m) m.enabled = !m.enabled; }); render(); break;

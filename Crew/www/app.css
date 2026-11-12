@@ -185,6 +185,9 @@ textarea.inp { min-height: 92px; resize: vertical; line-height: 1.5; }
 .btn { width: 100%; padding: 13px; border-radius: 11px; background: var(--blue); color: #fff;
   font-size: 16px; font-weight: 600; margin-top: 14px; }
 .btn.ghost { background: #e9e9ee; color: var(--text); }
+.btn.ghost.danger { background: #ffeeed; color: #d92b20; }
+.row2 { display: flex; gap: 10px; }
+.row2 > div { flex: 1 1 0; min-width: 0; }
 .btn.danger { background: #ffeeed; color: var(--red); }
 .btn:active { opacity: .8; }
 .btn-row { display: flex; gap: 10px; }
@@ -220,7 +223,7 @@ textarea.inp { min-height: 92px; resize: vertical; line-height: 1.5; }
 .ta { width: 100%; min-height: 220px; box-sizing: border-box; border: .5px solid var(--line);
   border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.55;
   font-family: ui-monospace, Menlo, monospace; resize: vertical; background: #fff; }
-.btn.danger { background: #ff3b30; }
+.btn.danger { background: #ff3b30; color: #fff; }
 
 /* ---- 装到桌面提示 ---- */
 #install { display: flex; align-items: center; gap: 9px; padding: calc(var(--top) + 8px) 12px 8px;
