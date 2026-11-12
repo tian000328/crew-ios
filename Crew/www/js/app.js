@@ -74,6 +74,7 @@
     box.innerHTML = `<div class="sh-h"><b>${esc(title)}</b><button class="ic plain" data-close="1">${ICON.close}</button></div>
       <div class="sh-b">${bodyHTML}</div>`;
     sh.hidden = false;
+    slideIn(box, box.offsetHeight || 320, 260);
     box.querySelector('[data-close]').onclick = closeSheet;
     sh.onclick = e => { if (e.target === sh) closeSheet(); };
     if (onMount) onMount(box);
@@ -140,14 +141,27 @@
     const groups = ['今天', '昨天', '本周', '更早'];
     let body = '';
     if (!list.length) {
-      body = `<div class="empty">
-        <div class="big">${esc(w.icon || '💬')}</div>
-        <b>${esc(w.name)} 还没有群</b>
-        <p>点右下角开一个。开出来就是一个群，${s.agents.length} 个角色都在里面，你说一句他们都看得到。</p>
-        <div class="chips" style="justify-content:center;flex-wrap:wrap;overflow:visible;margin-top:6px">
-          ${s.agents.map(a => `<button class="chip" data-act="talkto" data-id="${a.id}">${esc(a.emoji || '🤖')} 找${esc(a.code)}</button>`).join('')}
-        </div>
-      </div>`;
+      if (!s.providers.length) {
+        body = `<div class="empty">
+          <div class="big">🔑</div>
+          <b>还没有模型服务商</b>
+          <p>先加一个。服务商决定用哪家的模型，填上 API Key 才能真的说话。</p>
+          <div style="margin-top:16px"><button class="btn" data-act="settings" data-path="providers">添加服务商</button></div>
+        </div>`;
+      } else if (!s.agents.length) {
+        body = `<div class="empty">
+          <div class="big">🤖</div>
+          <b>还没有角色</b>
+          <p>角色 = 灵魂 + 职责 + 绑定的模型。一个角色就是团队里的一个人。</p>
+          <div style="margin-top:16px"><button class="btn" data-act="settings" data-path="agents">新建角色</button></div>
+        </div>`;
+      } else {
+        body = `<div class="empty">
+          <div class="big">${esc(w.icon || '💬')}</div>
+          <b>${esc(w.name)} 还没有群</b>
+          <p>点右下角开一个。建群时你自己挑谁进来，不是全员自动入群。</p>
+        </div>`;
+      }
     } else {
       for (const g of groups) {
         const sub = list.filter(x => timeGroup(x.updatedAt) === g);
@@ -156,13 +170,16 @@
         body += `<div class="wrap"><div class="card">` + sub.map(x => {
           const ms = members(x);
           const ico = ms.length > 1 ? '👥' : (ms[0] ? esc(ms[0].emoji || '🤖') : ICON.chat);
-          return `<div class="sess" data-act="open" data-id="${x.id}">
+          return `<div class="sw">
+          <div class="sess" data-act="open" data-id="${x.id}">
             <span class="sico">${ico}</span>
             <div class="stx">
               <div class="st">${esc(x.title || '未命名')}</div>
               <div class="ss">${esc(lastText(x))}</div>
             </div>
             <div class="stm">${fmtTime(x.updatedAt)}</div>
+          </div>
+          <button class="sdel" data-act="delchat" data-id="${x.id}">删除</button>
           </div>`;
         }).join('') + `</div></div>`;
       }
@@ -324,10 +341,11 @@
     const sess = () => st().sessions.find(v => v.id === sid);
     const cur = sess();
     let sys = sysPrompt(ag, cur);
-    if (ag.dir) {
-      const ls = await F.list(ag.dir);
-      const names = ls.ok ? (ls.entries || []).map(e => (e.dir ? '📁' : '📄') + e.name).slice(0, 60).join('、') : '';
-      sys += `\n\n【你的文件空间】${ag.dir}/ 是你专属的文件夹。${names ? '现在有：' + names : '现在是空的'}。\n你可以用 fs_list / fs_read / fs_write 三个工具读写里面的文件。写东西就写进去，不要只在回答里贴。`;
+    {
+      const pub = await F.list('');
+      const mine = await F.list('@' + ag.code);
+      const fmt = ls => ls.ok ? ((ls.entries || []).map(e => (e.dir ? '📁' : '📄') + e.name).slice(0, 40).join('、') || '空') : '读不到';
+      sys += `\n\n【文件空间】你有一块团队公共区和一块自己的私有区。\n公共区（所有同事共用，路径直接写文件名）：${fmt(pub)}\n私有区（只有你能看，路径写 @${ag.code}/文件名）：${fmt(mine)}\n你手上有 fs_list / fs_read / fs_write 三个工具。写文件时 private=true 就写进你的私有区，省略就写进公共区。要让同事看到的东西放公共区。写进文件，不要只在回答里贴。`;
     }
     let msgs = [{ role: 'system', content: sys }];
     for (const mm of cur.msgs) {
@@ -341,8 +359,12 @@
       }
     }
     const plugs = (ag.tools || []).map(id => (st().plugins || []).find(p => p.id === id)).filter(Boolean);
-    const fsTools = ag.dir ? F.tools(ag.dir) : [];
-    const tools = (plugs.length || fsTools.length) ? [...plugs.map(T.schema), ...fsTools] : undefined;
+    const fsTools = F.tools(ag.code);
+    const allMcp = (st().mcp || []).filter(m => m.enabled !== false);
+    const mine = (ag.mcpIds && ag.mcpIds.length) ? allMcp.filter(m => ag.mcpIds.indexOf(m.id) >= 0) : allMcp;
+    const mcpTools = MCP.schemas(mine);
+    const allTools = [...plugs.map(T.schema), ...fsTools, ...mcpTools];
+    const tools = allTools.length ? allTools : undefined;
 
     for (let round = 0; round < 4; round++) {
       let r;
@@ -359,15 +381,18 @@
           let res = '';
           try {
             const args = JSON.parse(tc.function.arguments || '{}');
-            if (ag.dir && fname.indexOf('fs_') === 0) res = await F.run(ag.dir, fname, args);
+            if (fname.indexOf('fs_') === 0) res = await F.run(ag.code, fname, args);
+            else if (fname.indexOf('mcp__') === 0) res = await MCP.callByName(st(), fname, args);
             else {
               const out = plug ? await T.run(plug, args) : '没这个工具';
               res = typeof out === 'string' ? out : JSON.stringify(out);
             }
           } catch (e) { res = '参数解析失败：' + e.message; }
-          const tname = ag.dir && fname.indexOf('fs_') === 0
+          const tname = fname.indexOf('fs_') === 0
             ? ({ fs_list: '看文件', fs_read: '读文件', fs_write: '写文件' }[fname] || fname)
-            : (plug ? plug.name : fname);
+            : fname.indexOf('mcp__') === 0
+              ? 'MCP · ' + fname.split('__').slice(2).join('__')
+              : (plug ? plug.name : fname);
           S.set(x => {
             const c = x.sessions.find(v => v.id === sid);
             c.msgs.push({ role: 'trace', title: tname + ' ' + (tc.function.arguments || ''), content: res, ts: Date.now() });
@@ -390,24 +415,124 @@
 
   function newChat() {
     const s = st();
-    const ids = s.agents.map(a => a.id);
-    if (!ids.length) { toast('先去「设置 → 灵魂」建一个角色'); return; }
-    const id = S.uid('s_');
-    S.set(x => {
-      x.sessions.unshift({ id, wsId: ws().id, memberIds: ids.slice(), mode: 'all', title: '新对话', msgs: [], updatedAt: Date.now() });
-      x.ui.sessionId = id;
+    if (!s.providers.length) { toast('先去「设置 → AI 服务商」加一个'); return; }
+    if (!s.agents.length) { toast('先去「设置 → 灵魂」建一个角色'); return; }
+
+    const rows = s.agents.map(a => {
+      const p = s.providers.find(v => v.id === a.providerId);
+      const noKey = !p || !p.apiKey;
+      return `<div class="pick" data-id="${a.id}">
+        <input type="checkbox">
+        <span class="pm">${esc(a.emoji || '🤖')}</span>
+        <span class="pt"><b>${esc(a.code)}</b><i>${esc(p ? p.name : '未绑服务商')} · ${esc(a.model || '未选模型')}${noKey ? ' · ⚠️ 没 Key' : ''}</i></span>
+        <span class="pc">${ICON.check || '✓'}</span>
+      </div>`;
+    }).join('');
+
+    const noKeyProv = s.providers.filter(p => !p.apiKey);
+    const warn = noKeyProv.length
+      ? `<div class="hint" style="color:#c0392b">这些服务商还没填 Key：${noKeyProv.map(p => esc(p.name)).join('、')}<br>没 Key 的角色发出去会失败。</div>`
+      : '';
+
+    sheet('新建群聊', `${warn}<div class="pickl">${rows}</div>
+      <div class="sh-f"><button class="btn ghost" id="pick-new">＋ 新角色</button><button class="btn ghost" id="pick-none">清空</button><button class="btn" id="pick-ok">创建</button></div>`, box => {
+      box.querySelector('#pick-new').onclick = () => { closeSheet(); setTimeout(() => agentSheet(null), 120); };
+      box.querySelectorAll('.pick').forEach(l => {
+        const cb = l.querySelector('input');
+        l.onclick = () => { cb.checked = !cb.checked; l.classList.toggle('on', cb.checked); };
+      });
+      box.querySelector('#pick-none').onclick = () => {
+        box.querySelectorAll('.pick').forEach(l => { l.querySelector('input').checked = false; l.classList.remove('on'); });
+      };
+      box.querySelector('#pick-ok').onclick = () => {
+        const ids = [...box.querySelectorAll('.pick')].filter(l => l.querySelector('input').checked).map(l => l.dataset.id);
+        if (!ids.length) { toast('至少选一个角色'); return; }
+        const id = S.uid('s_');
+        S.set(x => {
+          x.sessions.unshift({ id, wsId: ws().id, memberIds: ids, mode: 'all', title: '新对话', msgs: [], updatedAt: Date.now() });
+          x.ui.sessionId = id;
+        });
+        closeSheet();
+        go('chat');
+      };
     });
-    go('chat');
   }
 
   // ============ 主渲染 ============
+  let openSwipe = null;
+  function bindSwipe() {
+    document.querySelectorAll('.sw').forEach(sw => {
+      const row = sw.querySelector('.sess');
+      if (!row) return;
+      let x0 = 0, dx = 0, dragging = false;
+      const shut = el => { const r = el.querySelector('.sess'); if (r) tweenX(r, -80, 0, 200); el.classList.remove('op'); };
+      sw.addEventListener('touchstart', e => {
+        if (openSwipe && openSwipe !== sw) { shut(openSwipe); openSwipe = null; }
+        x0 = e.touches[0].clientX; dx = 0; dragging = true;
+      }, { passive: true });
+      sw.addEventListener('touchmove', e => {
+        if (!dragging) return;
+        dx = e.touches[0].clientX - x0;
+        const base = sw.classList.contains('op') ? -80 : 0;
+        row.style.transform = 'translateX(' + Math.min(0, Math.max(-96, base + dx)) + 'px)';
+      }, { passive: true });
+      sw.addEventListener('touchend', () => {
+        if (!dragging) return;
+        dragging = false;
+        const base = sw.classList.contains('op') ? -80 : 0;
+        const open = base + dx < -40;
+        tweenX(row, base + dx, open ? -80 : 0, 200);
+        sw.classList.toggle('op', open);
+        openSwipe = open ? sw : (openSwipe === sw ? null : openSwipe);
+      });
+      row.addEventListener('click', e => {
+        if (Math.abs(dx) > 10) { e.stopPropagation(); e.preventDefault(); }
+      }, true);
+    });
+  }
+
+  /* 横向补间：同样逐帧改 style，绕开 iOS WebView 里 CSS transition 卡首帧的问题 */
+  function tweenX(el, from, to, dur) {
+    if (!el) return;
+    const t0 = performance.now();
+    const step = now => {
+      const k = Math.min(1, (now - t0) / dur);
+      const e = 1 - Math.pow(1 - k, 3);
+      el.style.transform = 'translateX(' + (from + (to - from) * e).toFixed(2) + 'px)';
+      if (k < 1) requestAnimationFrame(step);
+      else el.style.transform = 'translateX(' + to + 'px)';
+    };
+    requestAnimationFrame(step);
+    setTimeout(() => { el.style.transform = 'translateX(' + to + 'px)'; }, dur + 60);
+  }
+
+  /* 逐帧改 style，不用 CSS 动画和 WAAPI —— iOS WebView 里两者都会卡在首帧。
+     只动 transform，不动 opacity，避免整块变透明。 */
+  function slideIn(el, fromY, dur) {
+    if (!el || !el.style) return;
+    const t0 = performance.now();
+    const step = now => {
+      const k = Math.min(1, (now - t0) / dur);
+      const e = 1 - Math.pow(1 - k, 3);
+      el.style.transform = 'translateY(' + (fromY * (1 - e)).toFixed(2) + 'px)';
+      if (k < 1) requestAnimationFrame(step);
+      else el.style.transform = '';
+    };
+    el.style.transform = 'translateY(' + fromY + 'px)';
+    requestAnimationFrame(step);
+    /* 兜底：rAF 在某些 WebView 状态下不触发，到点无条件复位，绝不让元素停在屏外 */
+    setTimeout(() => { el.style.transform = ''; }, dur + 80);
+  }
+
   function render() {
     const el = $('#screen');
     el.innerHTML = nav.view === 'list' ? screenList()
       : nav.view === 'chat' ? screenChat()
         : screenSettings();
     document.documentElement.style.setProperty('--fs', (st().ui.fontSize || 15) + 'px');
+    slideIn(el, 10, 190);
     drawDrawer();
+    if (nav.view === 'list') bindSwipe();
     const ta = $('#in');
     if (ta) { ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 110) + 'px'; }; }
     if (nav.view === 'chat') setTimeout(toBottom, 30);
@@ -453,13 +578,13 @@
       case 'groups': return pageGroups();
       case 'usage': return pageUsage();
       case 'appearance': return pageAppearance();
-      case 'files': return nav.settings[1] ? pageBrowser() : pageFiles();
+      case 'files': return nav.settings.length > 1 ? pageBrowser() : pageFiles();
       case 'tools': return pageTools();
       case 'threads': return pageThreads();
       case 'skills': return pageSkills();
       case 'agents': return p[1] ? pageAgentEdit(p[1]) : pageAgents();
       case 'memory': return p[1] ? pageMemoryEdit(p[1]) : pageMemory();
-      case 'mcp': return pageMcp();
+      case 'mcp': return p[1] ? mcpView() : pageMcp();
       case 'env': return pageEnv();
       default: return settingsMain();
     }
@@ -489,7 +614,7 @@
         <div class="sec">
           <div class="sec-t">Agent 运行时</div>
           <div class="card">
-            ${row({ icon: ICON.folder, tint: 'green', title: '文件空间', sub: s.agents.filter(a => a.dir).length + ' 块已建 / ' + s.agents.length + ' 个角色', act: 'nav', id: 'files', chev: true })}
+            ${row({ icon: ICON.folder, tint: 'green', title: '文件空间', sub: '公共区 + ' + s.agents.length + ' 块私有区', act: 'nav', id: 'files', chev: true })}
             ${row({ icon: ICON.tool, tint: 'orange', title: '可用工具', sub: (s.plugins || []).length + ' 个插件', act: 'nav', id: 'tools', chev: true })}
             ${row({ icon: ICON.task, tint: 'indigo', title: '子代理任务', sub: '交接与验收记录', act: 'nav', id: 'threads', chev: true })}
             ${row({ icon: ICON.skill, tint: 'green', title: '技能', sub: (s.skills || []).length + ' 条提示词片段', act: 'nav', id: 'skills', chev: true })}
@@ -796,6 +921,7 @@
     const prov = provider(a.providerId);
     const models = prov && (prov.models || []).length ? prov.models : ['echo'];
     const picked = new Set(a.tools || []);
+    const mcpPick = new Set(a.mcpIds || []);
     sheet(id ? '编辑角色' : '添加角色', `
       <div class="btn-row">
         <div style="flex:0 0 64px"><div class="field-l">头像</div><input class="inp" id="a-emoji" value="${esc(a.emoji)}" style="text-align:center"></div>
@@ -814,6 +940,11 @@
       <div class="chips" style="flex-wrap:wrap;overflow:visible">
         ${(s.plugins || []).map(p => `<button class="chip ${picked.has(p.id) ? 'on' : ''}" data-tool="${p.id}">${esc(p.icon || '🔧')} ${esc(p.name)}</button>`).join('') || '<span class="note">还没有工具</span>'}
       </div>
+      ${(s.mcp || []).length ? `
+      <div class="field-l">接哪些 MCP 服务器</div>
+      <div class="chips" style="flex-wrap:wrap;overflow:visible">
+        ${s.mcp.map(m => `<button class="chip ${mcpPick.has(m.id) ? 'on' : ''}" data-mcp="${m.id}">${esc(m.name)}</button>`).join('')}
+      </div>` : ''}
       <button class="btn" id="a-save">保存</button>
       ${id ? `<button class="btn danger" id="a-del">删除角色</button>` : ''}
     `, box => {
@@ -821,6 +952,11 @@
         const k = b.dataset.tool;
         if (picked.has(k)) { picked.delete(k); b.classList.remove('on'); }
         else { picked.add(k); b.classList.add('on'); }
+      });
+      box.querySelectorAll('[data-mcp]').forEach(b => b.onclick = () => {
+        const k = b.dataset.mcp;
+        if (mcpPick.has(k)) { mcpPick.delete(k); b.classList.remove('on'); }
+        else { mcpPick.add(k); b.classList.add('on'); }
       });
       box.querySelector('#a-save').onclick = () => {
         const v = {
@@ -832,7 +968,8 @@
           maxTokens: a.maxTokens || 4096,
           soul: box.querySelector('#a-soul').value,
           duty: box.querySelector('#a-duty').value,
-          tools: [...picked]
+          tools: [...picked],
+          mcpIds: [...mcpPick]
         };
         S.set(x => {
           if (id) Object.assign(x.agents.find(v2 => v2.id === id), v);
@@ -889,18 +1026,23 @@
 
   function pageFiles() {
     const s = st();
-    const ready = s.agents.filter(a => a.dir).length;
+    const pub = row({ icon: ICON.folder, tint: 'blue', title: '公共区', sub: '所有角色共用 · crew/files/', act: 'fopen', id: '@pub', chev: true });
+    const priv = s.agents.map(a => row({
+      icon: ICON.folder, tint: 'green',
+      title: (a.emoji || '🤖') + ' ' + a.code,
+      sub: '@' + a.code + '/', act: 'fopen', id: a.id, chev: true
+    })).join('');
     return `${head('文件空间')}
       <div class="scroll">
         <div class="sec">
-          <div class="card">
-            ${s.agents.map(a => row({
-              title: (a.emoji || '🤖') + ' ' + a.code,
-              sub: a.dir ? (a.dir + '/') : '还没建，点一下创建',
-              act: a.dir ? 'fopen' : 'fcreate', id: a.id, chev: true
-            })).join('') || `<div class="row"><div class="rtxt"><div class="rs">先加个角色</div></div></div>`}
-          </div>
-          <div class="sec-f">每个角色一块真文件夹，位置在 /var/minis/workspace/crew/agents/。建好之后他自己能往里写，你在终端里也能直接改，不是网页里的假存储。${ready ? `已建 ${ready} 块。` : ''}</div>
+          <div class="grp-t">公共</div>
+          <div class="card">${pub}</div>
+          <div class="sec-f">谁都能读写。群里的对话会自动带上这里的文件清单，他们想看你放的资料，直接说文件名就行。</div>
+        </div>
+        <div class="sec">
+          <div class="grp-t">私有</div>
+          <div class="card">${priv || `<div class="row"><div class="rtxt"><div class="rs">先加个角色</div></div></div>`}</div>
+          <div class="sec-f">每个角色一块，只有他自己看得到。位置在 crew/agents/&lt;代号&gt;/，你在终端里也能直接改。</div>
         </div>
       </div>`;
   }
@@ -908,7 +1050,7 @@
   function pageBrowser() {
     const v = FSVIEW;
     const parts = v.path ? v.path.split('/') : [];
-    const crumbs = [`<span class="crumb" data-act="fcroot">${esc(v.dir)}</span>`]
+    const crumbs = [`<span class="crumb" data-act="fcroot">${esc(v.dir || '公共区')}</span>`]
       .concat(parts.map((p, i) => `<span class="csep">/</span><span class="crumb" data-act="fcgo" data-id="${esc(parts.slice(0, i + 1).join('/'))}">${esc(p)}</span>`));
     const rows = v.entries.map(e => `<div class="row tap" data-act="${e.dir ? 'fenter' : 'fedit'}" data-id="${esc(e.name)}">
         <span class="fico">${e.dir ? '📁' : '📄'}</span>
@@ -916,7 +1058,7 @@
           <div class="rs">${e.dir ? '文件夹' : (e.size || 0) + ' 字节'}</div></div>
         <button class="ic plain" data-act="fdel" data-id="${esc(e.name)}">${ICON.trash}</button>
       </div>`).join('');
-    return `${head(v.dir + (v.path ? '/' + v.path : ''), `<button class="pill" data-act="fnew">新建</button>`)}
+    return `${head((v.dir || '公共区') + (v.path ? '/' + v.path : ''), `<button class="pill" data-act="fnew">新建</button>`)}
       <div class="crumbs">${crumbs.join('')}<button class="ic plain" data-act="fsync" style="margin-left:auto">${ICON.refresh || '↻'}</button></div>
       <div class="scroll">
         <div class="card" style="margin-top:10px">
@@ -946,7 +1088,7 @@
 
   async function fileEditSheet(name) {
     const p = (FSVIEW.path ? FSVIEW.path + '/' : '') + name;
-    const r = await F.read(FSVIEW.dir + '/' + p);
+    const r = await F.read((FSVIEW.dir ? FSVIEW.dir + '/' : '') + p);
     sheet(name, `
       <textarea class="ta" id="fc" spellcheck="false">${esc(r.ok ? (r.content || '') : '')}</textarea>
       <div class="btn-row"><button class="btn" data-act="fsave" data-id="${esc(name)}">保存</button></div>
@@ -960,15 +1102,71 @@
   }
 
   function pageMcp() {
-    return `${head('MCP 集成')}
+    const s = st();
+    const list = s.mcp || [];
+    return `${head('MCP 集成', `<button class="pill" data-act="mcpadd">添加</button>`)}
       <div class="scroll">
         <div class="sec">
           <div class="card">
-            ${row({ icon: ICON.mcp, tint: 'purple', title: '已连接的服务', sub: '0 个', right: '未开放' })}
+            ${list.map(m => row({
+              icon: ICON.mcp, tint: 'purple', title: m.name || m.url,
+              sub: (m.err ? '⚠️ ' + m.err : (m.tools || []).length + ' 个工具') + ' · ' + (m.enabled ? '已启用' : '已停用'),
+              act: 'mcpopen', id: m.id, chev: true
+            })).join('') || `<div class="row"><div class="rtxt"><div class="rs">还没加服务器，点右上角「添加」</div></div></div>`}
           </div>
-          <div class="sec-f">这一版还不接 MCP 服务器。现在要加外部能力，用「可用工具」里的 JSON 插件就行——一样是真发请求，区别只是插件是单个接口，MCP 是一整套。</div>
+          <div class="sec-f">MCP 服务器是走 JSON-RPC 的外部工具集合。填上地址就能拉到它的工具清单，角色勾了就能调。注意：网页版受浏览器跨域限制，有些服务器要在 App 里才能连上。</div>
         </div>
       </div>`;
+  }
+
+  function mcpView() {
+    const s = st();
+    const m = (s.mcp || []).find(v => v.id === (nav.settings[1] || ''));
+    if (!m) { nav.settings = ['mcp']; render(); return; }
+    const tools = (m.tools || []).map(t => `<div class="row"><div class="rtxt"><div class="rt">${esc(t.name)}</div><div class="rs">${esc(t.desc || '无描述')}</div></div></div>`).join('');
+    return `${head(m.name || 'MCP', `<button class="pill" data-act="mcpsync" id="ms">重连</button>`)}
+      <div class="scroll">
+        <div class="sec">
+          <div class="card">
+            ${row({ title: '地址', right: `<span style="font-size:12px;color:var(--dim);max-width:180px;overflow:hidden;text-overflow:ellipsis">${esc(m.url)}</span>` })}
+            ${row({ title: '状态', sub: m.err ? '⚠️ ' + m.err : '正常', right: m.enabled ? '已启用' : '已停用' })}
+            ${row({ title: '启停', act: 'mcptoggle', id: m.id, right: m.enabled ? '点一下停用' : '点一下启用' })}
+          </div>
+        </div>
+        <div class="sec">
+          <div class="grp-t">工具 ${(m.tools || []).length}</div>
+          <div class="card">${tools || `<div class="row"><div class="rtxt"><div class="rs">还没有工具，点「重连」拉一次</div></div></div>`}</div>
+        </div>
+        <div class="sec">
+          <div class="card">${row({ title: '删除这个服务器', act: 'mcpdel', id: m.id, right: '' })}</div>
+        </div>
+      </div>`;
+  }
+
+  function mcpAddSheet() {
+    sheet('添加 MCP 服务器', `<div class="sh-b">
+      <label class="fl">名字<input id="m-name" placeholder="比如 filesystem"></label>
+      <label class="fl">地址（http/https）<input id="m-url" placeholder="https://example.com/mcp" autocapitalize="off" autocorrect="off"></label>
+      <div class="hint" id="m-hint"></div>
+    </div>
+    <div class="sh-f"><button class="btn ghost" data-close>取消</button><button class="btn" id="m-ok">连接</button></div>`, box => {
+      const go = async () => {
+        const name = box.querySelector('#m-name').value.trim();
+        const url = box.querySelector('#m-url').value.trim();
+        const hint = box.querySelector('#m-hint');
+        if (!/^https?:\/\//.test(url)) { hint.textContent = '地址要以 http:// 或 https:// 开头'; return; }
+        hint.textContent = '正在握手…';
+        box.querySelector('#m-ok').disabled = true;
+        const srv = { id: S.uid('mcp_'), name: name || url, url, enabled: true, tools: [], sid: '' };
+        const r = await MCP.connect(srv);
+        box.querySelector('#m-ok').disabled = false;
+        if (!r.ok) { hint.textContent = '连不上：' + r.err; return; }
+        S.set(x => { (x.mcp = x.mcp || []).push(srv); });
+        closeSheet(); render();
+        toast('连上了，' + srv.tools.length + ' 个工具');
+      };
+      box.querySelector('#m-ok').onclick = go;
+    });
   }
 
   // ---- 环境变量 ----
@@ -1060,6 +1258,22 @@
         break;
       }
       case 'open': S.set(s => { s.ui.sessionId = id; }); go('chat'); break;
+      case 'delchat': {
+        const ss = st().sessions.find(v => v.id === id);
+        if (!ss) return;
+        sheet('删除这个群？', `<div class="sh-b"><p class="del-q">「${esc(ss.title || '未命名')}」里的全部消息都会被删掉，删了找不回来。</p></div>
+          <div class="sh-f"><button class="btn ghost" data-close>取消</button><button class="btn danger" id="dc-ok">删除</button></div>`,
+          box => {
+            box.querySelector('#dc-ok').onclick = () => {
+              S.set(x => {
+                x.sessions = x.sessions.filter(v => v.id !== id);
+                if (x.ui.sessionId === id) x.ui.sessionId = null;
+              });
+              closeSheet(); render(); toast('已删除');
+            };
+          });
+        break;
+      }
       case 'newchat': newChat(); break;
       case 'back': nav.view = 'list'; render(); break;
       case 'send': send(); break;
@@ -1075,19 +1289,16 @@
           } else { nav.settings = ['files']; render(); }
         } else back();
         break;
-      case 'fcreate': {
+      case 'fopen': {
+        if (id === '@pub') { goFiles('', ''); break; }
         const a = agent(id);
         if (!a) return;
-        const dir = dirOf(a);
-        F.init(dir, a.code).then(r => {
+        F.init(a.code).then(r => {
           if (!r.ok) { toast('建不了：' + (r.err || '服务没起')); return; }
-          S.set(x => { const t = x.agents.find(v => v.id === id); if (t) t.dir = dir; });
-          toast('建好了 agents/' + dir + '/');
-          render();
+          goFiles('@' + a.code, '');
         });
         break;
       }
-      case 'fopen': { const a = agent(id); if (a && a.dir) goFiles(a.dir, ''); break; }
       case 'fenter': {
         const base = FSVIEW.path ? FSVIEW.path + '/' : '';
         goFiles(FSVIEW.dir, base + id); break;
@@ -1136,6 +1347,24 @@
       }
       case 'sdone': nav.settings = []; nav.view = 'list'; render(); break;
       case 'nav': nav.settings = [id]; render(); break;
+      case 'mcpadd': mcpAddSheet(); break;
+      case 'mcpopen': nav.settings = ['mcp', id]; render(); break;
+      case 'mcptoggle': S.set(x => { const m = (x.mcp || []).find(v => v.id === id); if (m) m.enabled = !m.enabled; }); render(); break;
+      case 'mcpdel': S.set(x => { x.mcp = (x.mcp || []).filter(v => v.id !== id); }); nav.settings = ['mcp']; render(); break;
+      case 'mcpsync': {
+        const m0 = (st().mcp || []).find(v => v.id === id);
+        if (!m0) return;
+        const btn = $('#ms'); if (btn) { btn.textContent = '重连中'; btn.disabled = true; }
+        MCP.connect(m0).then(r => {
+          S.set(x => {
+            const m = (x.mcp || []).find(v => v.id === id);
+            if (m) { m.tools = m0.tools; m.err = m0.err || ''; m.sid = m0.sid || ''; }
+          });
+          render();
+          toast(r.ok ? '工具 ' + m0.tools.length + ' 个' : '失败：' + r.err);
+        });
+        break;
+      }
       case 'pnew': providerSheet(null); break;
       case 'pedit': providerSheet(id); break;
       case 'gnew': groupSheet(null); break;
@@ -1277,27 +1506,6 @@
   });
 
   // 装到桌面提示：只在非独立模式显示，关过就不再烦
-  (function installTip() {
-    const isApp = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.crew);
-    if (isApp) return;
-    const standalone = window.navigator.standalone === true ||
-      (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
-    if (standalone) return;
-    if (localStorage.getItem('crew.installTip') === 'off') return;
-    const ua = navigator.userAgent;
-    if (!/iPhone|iPad|iPod/.test(ua)) return;
-    const bar = document.createElement('div');
-    bar.id = 'install';
-    bar.innerHTML = '<span class="ii"><img src="icon-180.png" alt=""></span>' +
-      '<span class="it">装到桌面：点底部的 <b>分享</b> → <b>添加到主屏幕</b>，打开就是全屏 App</span>' +
-      '<button id="instx">知道了</button>';
-    const host = document.getElementById('app');
-    host.insertBefore(bar, host.firstChild);
-    bar.querySelector('#instx').onclick = () => {
-      localStorage.setItem('crew.installTip', 'off');
-      bar.remove();
-    };
-  })();
 
   // 旧数据迁移：一对一 -> 群聊
   S.set(x => {

@@ -38,8 +38,17 @@ struct RootView: UIViewControllerRepresentable {
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
         // file:// 页面默认不能发跨域请求，模型 API 会全部失败
-        cfg.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
+        // 用 responds(to:) 兜底：这个私有属性将来被移除时不至于直接崩
+        let sel = NSSelectorFromString("setAllowUniversalAccessFromFileURLs:")
+        if cfg.responds(to: sel) { cfg.setValue(true, forKey: "allowUniversalAccessFromFileURLs") }
+        let prefSel = NSSelectorFromString("setAllowFileAccessFromFileURLs:")
+        if cfg.preferences.responds(to: prefSel) { cfg.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs") }
+        cfg.websiteDataStore = .default()
         cfg.userContentController.add(bridge, name: "crew")
+        cfg.userContentController.addUserScript(WKUserScript(
+            source: Bridge.bootstrapJS,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true))
 
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.isOpaque = false
