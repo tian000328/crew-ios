@@ -1,0 +1,14 @@
+name: ping
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "ubuntu ok"
+  mac:
+    runs-on: macos-14
+    steps:
+      - run: sw_vers && xcodebuild -version
