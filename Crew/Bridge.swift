@@ -115,7 +115,12 @@ final class Bridge: NSObject, WKScriptMessageHandler {
                     entries.append(["name": u.lastPathComponent, "dir": d, "size": sz, "path": u.lastPathComponent])
                 }
             }
-            entries.sort { ($0["dir"] as? Bool ?? false, $0["name"] as? String ?? "") > ($1["dir"] as? Bool ?? false, $1["name"] as? String ?? "") }
+            entries.sort { a, b in
+                let da = a["dir"] as? Bool ?? false
+                let db = b["dir"] as? Bool ?? false
+                if da != db { return da }
+                return (a["name"] as? String ?? "") < (b["name"] as? String ?? "")
+            }
             return ["ok": true, "path": "", "entries": entries, "root": pub.path]
         }
 
