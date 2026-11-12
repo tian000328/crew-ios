@@ -9,6 +9,6 @@ jobs:
     steps:
       - run: echo "ubuntu ok"
   mac:
-    runs-on: macos-14
+    runs-on: macos-13
     steps:
       - run: sw_vers && xcodebuild -version
