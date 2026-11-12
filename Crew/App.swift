@@ -1,0 +1,61 @@
+import SwiftUI
+import WebKit
+
+@main
+struct CrewApp: App {
+    var body: some Scene {
+        WindowGroup {
+            RootView()
+                .ignoresSafeArea()
+                .preferredColorScheme(.light)
+        }
+    }
+}
+
+struct RootView: UIViewControllerRepresentable {
+    /// 桥必须被强引用，WKUserContentController 只弱引用 handler
+    func makeCoordinator() -> Bridge { Bridge() }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let vc = UIViewController()
+        vc.view.backgroundColor = UIColor(red: 0.949, green: 0.949, blue: 0.969, alpha: 1)
+        let wv = makeWebView(bridge: context.coordinator)
+        wv.translatesAutoresizingMaskIntoConstraints = false
+        vc.view.addSubview(wv)
+        NSLayoutConstraint.activate([
+            wv.leadingAnchor.constraint(equalTo: vc.view.leadingAnchor),
+            wv.trailingAnchor.constraint(equalTo: vc.view.trailingAnchor),
+            wv.topAnchor.constraint(equalTo: vc.view.topAnchor),
+            wv.bottomAnchor.constraint(equalTo: vc.view.bottomAnchor)
+        ])
+        return vc
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+
+    private func makeWebView(bridge: Bridge) -> WKWebView {
+        let cfg = WKWebViewConfiguration()
+        cfg.allowsInlineMediaPlayback = true
+        cfg.mediaTypesRequiringUserActionForPlayback = []
+        cfg.userContentController.add(bridge, name: "crew")
+
+        let wv = WKWebView(frame: .zero, configuration: cfg)
+        wv.isOpaque = false
+        wv.backgroundColor = .clear
+        wv.scrollView.backgroundColor = UIColor(red: 0.949, green: 0.949, blue: 0.969, alpha: 1)
+        wv.scrollView.bounces = false
+        wv.scrollView.contentInsetAdjustmentBehavior = .never
+        wv.allowsBackForwardNavigationGestures = false
+        if #available(iOS 16.4, *) {
+            wv.isInspectable = true
+        }
+
+        if let url = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "www") {
+            wv.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        } else {
+            wv.loadHTMLString("<h1 style='font:16px -apple-system;padding:40px'>资源没打进包：找不到 www/index.html</h1>",
+                              baseURL: nil)
+        }
+        return wv
+    }
+}

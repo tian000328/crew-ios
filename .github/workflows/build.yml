@@ -1,0 +1,66 @@
+name: build-ipa
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 xcodegen
+        run: brew install xcodegen
+
+      - name: 生成工程
+        run: xcodegen generate
+
+      - name: 编译（不签名）
+        run: |
+          set -e
+          xcodebuild \
+            -project Crew.xcodeproj \
+            -scheme Crew \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/Crew.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            archive
+
+      - name: 打包成 ipa
+        run: |
+          set -e
+          mkdir -p build/Payload
+          cp -R build/Crew.xcarchive/Products/Applications/Crew.app build/Payload/
+          cd build
+          zip -qry Crew-unsigned.ipa Payload
+          ls -lh Crew-unsigned.ipa
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: Crew-unsigned-ipa
+          path: build/Crew-unsigned.ipa
+          retention-days: 30
+
+      - name: 发布到 Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Crew 构建 #${{ github.run_number }}
+          body: |
+            未签名的 ipa，用全能签等工具签名安装。
+            bundle id: com.crewapp.crew
+          files: build/Crew-unsigned.ipa
+          draft: false
+          prerelease: false
